@@ -2,11 +2,10 @@ import numpy as np
 import random
 import math
 import time
+import heapq
 import statistics
 import matplotlib.pyplot as plt
 import itertools
-
-# Function definitions
 
 def labor():
     constant_vector = np.random.randint(1, 11, size=250)
@@ -138,30 +137,47 @@ def zRandom(z, sol, i, FunctionsBook):
     return min(scores)
 
 def greedy_algorithm(size, completePlay, FunctionsBook, ran):
-    # Set the initial permutation
-    permutation = []
-    # Set the minimal cost to a high value
-    minimal_cost = float('inf')
-    for i in range(size):
-        minimal_cost_element = float('inf')
-        minimal_element = None
-        
-        for element in completePlay:
-            if element not in permutation:
-                permutation_cost = cost(permutation + [element], size, FunctionsBook)
-                if permutation_cost < minimal_cost_element:
-                    minimal_cost_element = permutation_cost
-                    minimal_element = element
-        
-        if minimal_element is not None:
-            # Add the minimal element to the permutation
-            permutation.append(minimal_element)
-            
-            # Update the minimal cost
-            minimal_cost = cost(permutation, size, FunctionsBook) / ran
+    # Use a priority queue (min-heap)
+    heap = []
     
-    return minimal_cost
+    # Compute initial costs once
+    initial_costs = {}
+    for element in completePlay:
+        element_frozen = frozenset(element.items())  # Hashable type
+        initial_costs[element_frozen] = cost([element], size, FunctionsBook)
+        heapq.heappush(heap, (initial_costs[element_frozen], element))
+    
+    # Initialize
+    permutation = []
+    selected_jobs = set()
+    
+    # Extract the best job first
+    min_cost, best_element = heapq.heappop(heap)
+    permutation.append(best_element)
+    selected_jobs.add(frozenset(best_element.items()))
 
+    # Maintain a running total cost instead of recomputing
+    running_cost = min_cost / ran
+
+    for _ in range(size - 1):  # We already selected 1 job
+        if not heap:
+            break
+        
+        # Get the next lowest cost job that is not in selected_jobs
+        while heap:
+            min_cost, best_element = heapq.heappop(heap)
+            best_element_frozen = frozenset(best_element.items())
+            if best_element_frozen not in selected_jobs:
+                break  
+
+        # Add the best element to the permutation
+        permutation.append(best_element)
+        selected_jobs.add(best_element_frozen)  # Mark as used
+        
+        # Incrementally update the cost instead of recomputing fully
+        running_cost += min_cost / ran
+
+    return running_cost,permutation
 
 
 def acceptance_probability(old_cost, new_cost, temperature):
@@ -170,32 +186,37 @@ def acceptance_probability(old_cost, new_cost, temperature):
     else:
         return math.exp((old_cost - new_cost) / temperature)
 
-def simulated_annealingReg(size, completePlay, FunctionsBook, ran):
+def simulated_annealingReg(size, completePlay, FunctionsBook, ran, per):
     cost_history = []
-    counter = 0
     temperature = 1000
-    minimal_permutation = None
     cooling_rate = 0.003
-    permutation = random.sample(completePlay, size)
-    old_cost = cost(permutation, size, FunctionsBook)
-    minimal_cost = float('inf')
-    end_time = time.time() + 600
-    elapsed_time = time.time()
+    permutation = per  # Start with the provided Greedy solution
+    minimal_permutation = per  # Track the best solution found
+    old_cost = cost(permutation, size, FunctionsBook)  # Cost of the initial solution
+    minimal_cost = old_cost  # Initialize minimal cost with the initial cost
+    start_time = time.time()  # Record the starting time
+    last_recorded_time = start_time  # Track last measurement
+    end_time = start_time + 600  # Run for 10 minutes
     improvement_counter = 0
     total_counter = 0
     target_acceptance_rate = 0.5  # Set the target acceptance rate to 50%
-    
+    counter = 0
+
+    # **Initial measurement before the process starts**
+    cost_history.append(minimal_cost / ran)
+
     while time.time() < end_time:
+        # Generate a new permutation by randomly modifying the current one
         new_permutation = permutation[:]
-        
         index1 = random.randint(0, size - 1)
-        index2 = 0
         t = new_permutation[index1]
-        
+
+        # Find a random replacement for the job at `index1`
         track = random.sample(completePlay, 1)
         while track == t:
             track = random.sample(completePlay, 1)
-        
+
+        # Replace or swap jobs in the new permutation
         if track in permutation:
             index2 = new_permutation.index(track)
             new_permutation.remove(track)
@@ -205,40 +226,54 @@ def simulated_annealingReg(size, completePlay, FunctionsBook, ran):
         else:
             new_permutation.remove(t)
             new_permutation.insert(index1, track)
-        
+
+        # Calculate the cost of the new permutation
         new_cost = cost(new_permutation, len(new_permutation), FunctionsBook)
+
+        # Determine if the new solution is accepted
         acceptance_prob = acceptance_probability(old_cost, new_cost, temperature)
-        random_number = random.random()
-        
-        if random_number < acceptance_prob:
-            permutation = new_permutation
-            old_cost = new_cost
+        if random.random() < acceptance_prob:
+            permutation = new_permutation  # Accept the new solution
+            old_cost = new_cost  # Update the old cost
             improvement_counter += 1
-        
+
+        # Update the minimal cost and best solution if improvement is found
         if new_cost < minimal_cost:
             minimal_cost = new_cost
             minimal_permutation = new_permutation
-        
+
+        # Update total iterations and acceptance rate
         total_counter += 1
         acceptance_rate = improvement_counter / total_counter
-        
+
+        # Adjust cooling rate based on acceptance rate
         if acceptance_rate > target_acceptance_rate:
             cooling_rate *= 1.05  # Increase cooling rate to converge faster
         else:
             cooling_rate *= 0.95  # Decrease cooling rate to explore more of the search space
-        
+
+        # Update temperature
         temperature *= 1 - cooling_rate
         counter += 1
-        
-        if counter == 1000:
-            permutation = random.sample(completePlay, size)
-            old_cost = cost(permutation, size, FunctionsBook)
+
+        # Reset the permutation every 6000 iterations, but retain the best solution
+        if counter == 5000:
+            permutation = minimal_permutation[:]  # Restart from the best solution
+            old_cost = minimal_cost
             counter = 0
-        
-        if int((time.time() - elapsed_time) / 60) == len(cost_history):
+
+        # Record the minimal cost every 60 seconds
+        current_time = time.time()
+        if current_time - last_recorded_time >= 60:
             cost_history.append(minimal_cost / ran)
-    
+            last_recorded_time = current_time  # Reset last recorded time
+
+    # **Final measurement at the last second**
+    cost_history.append(minimal_cost / ran)
+
     return cost_history
+
+
 
 def adaptive_crossover_prob(generation):
     # Set the initial crossover probability
@@ -275,72 +310,94 @@ def mutate(permutation, original_size, completePlay):
     permutation.insert(index, sam)
     return permutation
 
-def genetic_algorithm(completePlay, size, FunctionsBook, ran):
+def genetic_algorithm(completePlay, size, FunctionsBook, ran, per):
     cost_history = []
-    # Set the minimum population size
-    min_population_size = 100
-    # Set the maximum population size
-    max_population_size = 1000
-    minimal_cost = float('inf')
-    minimal_permutation = None
-    population_size = min_population_size
-    
-    population = []
-    for _ in range(population_size):
-        permutation = random.sample(completePlay, size)
-        population.append(permutation)
-    
-    end_time = time.time() + 600
-    elapsed_time = time.time()
+    population_size = 100  # Start small, let it adjust dynamically
+    max_population_growth = 1.2  # Population expands at most 20%
+    min_population_reduction = 0.8  # Population shrinks to 80% on stagnation
+    max_stagnant_generations = 1000 # Restart threshold for stagnation
+    stagnant_generations = 0
+
+    # Initialize Greedy solution
+    minimal_cost = cost(per, size, FunctionsBook)  # Start with Greedy cost
+    minimal_permutation = per  # Track the best solution
+
+    # Initialize population
+    def initialize_population(per):
+        population = [per]  # Start with the Greedy solution
+        for _ in range(population_size - 1):
+            population.append(random.sample(completePlay, size))  # Add random permutations
+        return population
+
+    population = initialize_population(per)
+
+    start_time = time.time()  # Record starting time
+    last_recorded_time = start_time  # Track the last recorded measurement
+    end_time = start_time + 600  # Run for 10 minutes
     generation = 0
-    
+
+    # **Initial measurement before the process starts**
+    cost_history.append(minimal_cost / ran)
+
     while time.time() < end_time:
-        population_cost = []
         generation += 1
-        
-        for permutation in population:
-            c = cost(permutation, size, FunctionsBook)
-            population_cost.append(c)
-        
+
+        # Compute population costs
+        population_cost = [cost(perm, size, FunctionsBook) for perm in population]
+
+        # Sort population by cost (lower is better)
         population_sorted = sorted(zip(population, population_cost), key=lambda x: x[1])
         population, population_cost = zip(*population_sorted)
         population = list(population)
         population_cost = list(population_cost)
-        
+
+        # Update best solution
         if population_cost[0] < minimal_cost:
             minimal_cost = population_cost[0]
             minimal_permutation = population[0]
-        
-        if int((time.time() - elapsed_time) / 60) == len(cost_history):
+            stagnant_generations = 0  # Reset stagnation counter
+        else:
+            stagnant_generations += 1
+
+        # Reset population if stagnation occurs
+        if stagnant_generations >= max_stagnant_generations:
+            population = initialize_population(minimal_permutation)  # Restart from the best solution
+            stagnant_generations = 0
+            continue
+
+        # Record minimal cost every 60 seconds
+        current_time = time.time()
+        if current_time - last_recorded_time >= 60:
             cost_history.append(minimal_cost / ran)
-        
-        avg_cost = sum(population_cost) / len(population_cost)
-        std_cost = statistics.stdev(population_cost)
-        
-        fitness = [1 / (cost_val - minimal_cost + 1) for cost_val in population_cost]
-        fitness_sum = sum(fitness)
-        fitness = [f / fitness_sum for f in fitness]
-        
-        neff = 1 / sum([f ** 2 for f in fitness])
-        
-        if neff > population_size:
-            population_size = min(max_population_size, int(population_size * 1.2))
-        
-        while len(population) < population_size:
+            last_recorded_time = current_time  # Reset last recorded time
+
+        # Adjust population size dynamically based on diversity
+        diversity = statistics.stdev(population_cost)
+        if diversity < 0.1 * minimal_cost:  # Shrink if diversity is too low
+            population_size = max(int(population_size * min_population_reduction), 50)
+        elif generation % 50 == 0:  # Expand periodically
+            population_size = min(int(population_size * max_population_growth), 1000)
+
+        # Generate new population with crossover/mutation
+        new_population = []
+        while len(new_population) < population_size:
             crossover_prob = adaptive_crossover_prob(generation)
-            random_number = random.random()
-            
-            if random_number < crossover_prob:
-                parent1 = random.randint(0, len(population) - 1)
-                parent2 = random.randint(0, len(population) - 1)
-                permutation = crossover(population[parent1], population[parent2], size)
+            if random.random() < crossover_prob:
+                parent1, parent2 = random.sample(range(len(population)), 2)
+                new_perm = crossover(population[parent1], population[parent2], size)
             else:
                 parent = random.randint(0, len(population) - 1)
-                permutation = mutate(population[parent], size, completePlay)
-            
-            population.append(permutation)
-    
+                new_perm = mutate(population[parent], size, completePlay)
+            new_population.append(new_perm)
+
+        population = new_population
+
+    # **Final measurement at the last second**
+    cost_history.append(minimal_cost / ran)
+
     return cost_history
+
+
 
 
 # Total number of jobs and jobs to rank
@@ -392,9 +449,9 @@ for i in range(10):
 
 for instance in instances:
     ran = zRandom(100, instance, 250, FunctionsBook)
-    minimal_cost = greedy_algorithm(250, instance, FunctionsBook, ran)
-    costArr2 = genetic_algorithm(instance, 250, FunctionsBook, ran)
-    costArr3 = simulated_annealingReg(250, instance, FunctionsBook, ran)
+    minimal_cost,permutation = greedy_algorithm(250, instance, FunctionsBook, ran)
+    costArr2 = genetic_algorithm(instance, 250, FunctionsBook, ran,permutation)
+    costArr3 = simulated_annealingReg(250, instance, FunctionsBook, ran,permutation)
     gen.append(costArr2)
     greed.append(minimal_cost)
     simReg.append(costArr3)
@@ -407,12 +464,11 @@ simReg_mean = []
 mean_greed = []
 
 for a in timeArr:
-    total1 = 0
-    total2 = 0
-    total3 = 0
-    for b in range(10):
-        total2 += simReg[b][a]
-        total3 += gen[b][a]
+    total2 = 0  # Simulated costs
+    total3 = 0  # Genetic costs
+    for b in range(10):  # Iterate over instances
+        total2 += simReg[b][a]  # Simulated at time `a`
+        total3 += gen[b][a]  # Genetic at time `a`
     gen_mean.append(total3 / 10)
     simReg_mean.append(total2 / 10)
     mean_greed.append(np.mean(greed))
@@ -425,125 +481,3 @@ plt.xlabel('Minutes')
 plt.ylabel('Normalized Average Cost')
 plt.legend()
 plt.show()
-
-def simulated_annealingTime(size, completePlay, FunctionsBook, ran):
-    cost_history = []
-    counter = 0
-    temperature = 1000
-    minimal_permutation = None
-    cooling_rate = 0.003
-    permutation = random.sample(completePlay, size)
-    old_cost = cost(permutation, size, FunctionsBook)
-    minimal_cost = float('inf')
-    end_time = time.time() + 600
-    elapsed_time = time.time()
-    improvement_counter = 0
-    total_counter = 0
-    target_acceptance_rate = 0.5  # Set the target acceptance rate to 50%
-    
-    while time.time() < end_time:
-        new_permutation = permutation[:]
-        
-        index1 = random.randint(0, size - 1)
-        index2 = 0
-        t = new_permutation[index1]
-        
-        track = random.sample(completePlay, 1)
-        while track == t:
-            track = random.sample(completePlay, 1)
-        
-        if track in permutation:
-            index2 = new_permutation.index(track)
-            new_permutation.remove(track)
-            new_permutation.remove(t)
-            new_permutation.insert(index1, track)
-            new_permutation.insert(index2, t)
-        else:
-            new_permutation.remove(t)
-            new_permutation.insert(index1, track)
-        
-        new_cost = cost(new_permutation, len(new_permutation), FunctionsBook)
-        acceptance_prob = acceptance_probability(old_cost, new_cost, temperature)
-        random_number = random.random()
-        
-        if random_number < acceptance_prob:
-            permutation = new_permutation
-            old_cost = new_cost
-            improvement_counter += 1
-        
-        if new_cost < minimal_cost:
-            minimal_cost = new_cost
-            minimal_permutation = new_permutation
-        
-        if new_cost<ran*0.5:
-            return time.time()-elapsed_time
-        
-        total_counter += 1
-        acceptance_rate = improvement_counter / total_counter
-        
-        if acceptance_rate > target_acceptance_rate:
-            cooling_rate *= 1.05  # Increase cooling rate to converge faster
-        else:
-            cooling_rate *= 0.95  # Decrease cooling rate to explore more of the search space
-        
-        temperature *= 1 - cooling_rate
-        counter += 1
-        
-        if counter == 1000:
-            permutation = random.sample(completePlay, size)
-            old_cost = cost(permutation, size, FunctionsBook)
-            counter = 0
-        
-        if int((time.time() - elapsed_time) / 60) == len(cost_history):
-            cost_history.append(minimal_cost / ran)
-    
-    return time.time()-elapsed_time
-
-# Total number of jobs and jobs to rank
-num_jobs = 5000
-num_jobs_to_rank = 250
-num_agents = 20
-
-# Set the total sum of job rankings
-total_sum_jobs =  627500
-
-# Generate job rankings ensuring the total sum constraint and capping each job's score
-job_rankings = np.zeros(num_jobs)
-
-# Distribute the total sum across jobs, capping the score to ensure it stays within the range
-for i in range(num_jobs_to_rank):
-    # Calculate the sum for each job
-    job_sum = min(total_sum_jobs, num_agents * (num_jobs_to_rank - i))
-    
-    # Assign the calculated sum to the job
-    job_rankings[i] = job_sum
-    total_sum_jobs -= job_sum
-
-# Shuffle the job rankings
-np.random.shuffle(job_rankings)
-
-# Create an array of dictionaries representing jobs with their attributes and values
-bigJobs = []
-for i in range(num_jobs):
-    num_machines = 5
-    activated_machine = random.randint(1, num_machines)
-    job_attributes = {
-        'job_cost': np.random.uniform(100, 1000),
-        'power_consumption': np.random.uniform(10, 100),
-        'labor_requirement': np.random.randint(1, 10),
-        **{f"machine_{j}": 1 if j == activated_machine else 0 for j in range(1, num_machines + 1)},
-        'job_ranking': min(job_rankings[i], num_agents * num_jobs_to_rank)  # Cap the job ranking score
-    }
-    bigJobs.append(job_attributes)
-    
-instances = []
-dicT={}
-for i in range(10):
-    instances.append(samples(700))
-
-for c in range(25,251,25):
-    dicT[c]=[]
-    FunctionsBook = bookFunction(c)
-    for instance in instances:
-        ran = zRandom(100, instance,c, FunctionsBook)
-        dicT[c].append(simulated_annealingTime(c, instance, FunctionsBook, ran))
